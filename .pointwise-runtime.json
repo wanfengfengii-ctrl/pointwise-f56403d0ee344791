@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "api",
+  "setup": [],
+  "start": ["python3", "-B", "run_rehearsal.py", "--host", "${POINTWISE_HOST}", "--port", "${POINTWISE_PORT}"],
+  "readiness_path": "/health",
+  "verify": ["python3", "-B", "check_project.py"],
+  "demo": ["python3", "-B", "demo.py"]
+}

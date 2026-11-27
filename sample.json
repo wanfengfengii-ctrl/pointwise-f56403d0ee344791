@@ -1,0 +1,13 @@
+{
+  "score": {
+    "show": "qinghe",
+    "sections": ["开场", "休息"],
+    "cues": [
+      {"id": "A", "section": "开场", "voice": "高声部", "beat": 4, "text": "吸气"},
+      {"id": "B", "section": "开场", "voice": "低声部", "beat": 4, "text": "收声"},
+      {"id": "C", "section": "开场", "voice": "高声部", "beat": 8, "text": "延长"}
+    ]
+  },
+  "section": "开场",
+  "assignments": {"高声部": "alpha", "低声部": "beta"}
+}
