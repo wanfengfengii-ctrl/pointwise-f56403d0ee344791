@@ -9,9 +9,10 @@
 ```sh
 python3 -B check_project.py
 python3 -B demo.py
+python3 -B pause_fixture.py
 ```
 
-标准回归入口由项目控制台提供。直接运行完整测试套件也可使用 `python3 -B -m unittest discover -v`。测试和演示启用独立临时目录、实际 SQLite 数据库和环回 HTTP 服务。样例位于 `sample.json`，演示经接口显式导入，检查卡项顺序、失答时的待查、原灯次复领和结册复读。
+标准回归入口由项目控制台提供。直接运行完整测试套件也可使用 `python3 -B -m unittest discover -v`。测试和演示启用独立临时目录、实际 SQLite 数据库和环回 HTTP 服务。样例位于 `sample.json`，演示经接口显式导入，检查卡项顺序、失答时的待查、原灯次复领和结册复读。`pause_fixture.py` 按 `PAUSE_BOOK.md` 的约定演示暂停取点：交错发卡下两台同一真实时刻的完整实亮前缀、失答后的同号续办、封存后值班端重开且两台离线的原册复领，并保留原发卡与散场结册回归。
 
 ## 启动
 
@@ -48,6 +49,8 @@ python3 -B -m lamp.http --db beta.sqlite3 --show qinghe --lamp beta --duty-port 
 | 值班 `GET /lookup` | `show`, `request_id` | 200，原单和已提交的查单状态 |
 | 值班 `POST /close_book` | `show` | 200，`pending` 和欠查原号，或 `closed`、`book_id` 及 `entries` |
 | 值班 `GET /read_book` | `show`, `book_id` | 200，原封存结册 |
+| 值班 `POST /mark_pause` | `show`, `mark_id` | 200，该暂停号的待核状态，或含 `heads`、`entries` 的封存册；同号续办与复领固定同结果 |
+| 值班 `GET /read_pause` | `show`, `mark_id` | 200，原暂停状态或原封存册；未知号 404，查询只读 |
 
 例如，已生成编号 1 的开场校样后，向值班端发 `POST /send`，请求体为 `{"show":"qinghe","request_id":"U","preview_id":1,"cue_id":"A","target":"alpha"}`。普通同参重投使用同一请求体。可选的 `transport` 形如 `{"connection":"desk-alpha-2","short":1}`，用于显式选择交付交换。短号取从 0 起、大小为 `--short-pool` 的整数池。逻辑连接标识使用 ASCII 字母、数字、点、横线和下划线。同一连接内已绑定的短号归原请求，另一连接可同时使用同一短号。省略 `transport` 时，待查单沿用首次投递任次，已结清单可直接复领。
 
@@ -60,5 +63,8 @@ python3 -B -m lamp.http --db beta.sqlite3 --show qinghe --lamp beta --duty-port 
 | 值班 `POST /report` | 原连接头和只含 `short` 的回报正文 | 可匹配时返回原单状态，连接或正文不可用时为 `unverified` |
 | 灯台 `GET /attempt_result` | `show`, `connection`, `short` | 已提交的该任次实亮记录 |
 | 灯台 `GET /flash` | `show`, `number` | 当前台指定实际灯次的记录 |
+| 灯台 `POST /pause_marker` | JSON `show`, `mark_id` | 200，扣住本台新首亮（TTL 自动放行）并回 `head`；同号重放 `replay` 为真 |
+| 灯台 `GET /pause_head` | `show` | 200，当前台已提交实亮的截至灯次，无实亮为 0 |
+| 灯台 `POST /pause_release` | JSON `show`, `mark_id` | 200，提前放行暂停扣持，返回 `released` |
 
-错误响应包含 `error` 和 `message`。400 用于非法输入，包括负拍、非整数拍、布尔拍、缺拍位、谱稿引用未声明段和候选缺目标。404 用于找不到场次、修订、选段、固定卡项、原请求、实亮或册号。409 用于同号异参、目标不符、任次归属冲突及无法匹配发卡事实。灯台暂时无法读取值班端的已受理事实时返回 503。投递失答、任次结果尚未能查实或领队暂时无法核对实亮时，值班端保留欠查状态。未查实的请求没有成功灯次，也不会进入固定册页。
+错误响应包含 `error` 和 `message`。400 用于非法输入，包括负拍、非整数拍、布尔拍、缺拍位、谱稿引用未声明段和候选缺目标。404 用于找不到场次、修订、选段、固定卡项、原请求、实亮、暂停号或册号。409 用于同号异参、目标不符、任次归属冲突及无法匹配发卡事实。灯台暂时无法读取值班端的已受理事实时返回 503。投递失答、任次结果尚未能查实或领队暂时无法核对实亮时，值班端保留欠查状态。暂停取点失答或无法确认两台共同截面时保留 `pending` 待核，不改变任何原单核回状态，在线灯台继续普通首亮。未查实的请求没有成功灯次，也不会进入固定册页。

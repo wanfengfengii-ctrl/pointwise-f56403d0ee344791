@@ -6,6 +6,9 @@ from dispatch.attempts import AttemptStore, connection_name
 from dispatch.delivery import deliver_order, handle_short_report
 from dispatch.orders import OrderStore
 from lamp.http import LampClient
+from pause.http import handle_mark_pause, handle_read_pause
+from pause.snapshot import PauseService
+from pause.store import PauseStore
 from plan.http import handle_preview, handle_read_preview
 from plan.store import PreviewStore
 from review.archive import BookArchive
@@ -58,8 +61,10 @@ def serve_duty(path, show, lamp_ports, port=0, short_pool=2):
              for lamp, endpoint in lamp_ports.items()}
     scores, previews = ScoreStore(path), PreviewStore(path)
     orders, attempts, archive = OrderStore(path, previews), AttemptStore(path, short_pool), BookArchive(path)
-    for store in (scores, previews, orders, attempts, archive):
+    pauses = PauseStore(path)
+    for store in (scores, previews, orders, attempts, archive, pauses):
         store.initialize()
+    pause_service = PauseService(pauses, lamps)
     routes = {
         ('POST', '/score_write'): lambda req: handle_score_write(scores, show, req.body),
         ('GET', '/revision'): lambda req: handle_read_revision(scores, show, req.query),
@@ -71,6 +76,8 @@ def serve_duty(path, show, lamp_ports, port=0, short_pool=2):
         ('POST', '/report'): lambda req: _receive_report(orders, attempts, lamps, show, req),
         ('POST', '/close_book'): lambda req: handle_close_book(orders, lamps, archive, show, req.body),
         ('GET', '/read_book'): lambda req: handle_read_book(archive, show, req.query),
+        ('POST', '/mark_pause'): lambda req: handle_mark_pause(pause_service, show, req.body),
+        ('GET', '/read_pause'): lambda req: handle_read_pause(pause_service, show, req.query),
     }
     return make_server(port, routes)
 

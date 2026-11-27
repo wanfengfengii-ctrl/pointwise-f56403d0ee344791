@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 from common import ApiError, fields, integer, query_integer, require_show, text
 from dispatch.attempts import connection_name
+from lamp.gate import PauseGate
 from lamp.history import ActualFlash, find_attempt_flash, read_flash
 from lamp.intake import execute_cue
 from lamp.store import LampStore
@@ -38,6 +39,26 @@ class LampClient:
     def read_flash(self, show, number):
         return self._read(query_path('/flash', show=show, number=number))
 
+    def pause_marker(self, show, mark_id):
+        status, response = fetch(self.port, 'POST', '/pause_marker',
+                                 {'show': show, 'mark_id': mark_id})
+        if status != 200:
+            raise WireError(f'Lamp pause marker failed, HTTP {status}')
+        return response
+
+    def pause_head(self, show):
+        status, response = fetch(self.port, 'GET', query_path('/pause_head', show=show))
+        if status != 200:
+            raise WireError(f'Lamp pause head read failed, HTTP {status}')
+        return response
+
+    def pause_release(self, show, mark_id):
+        status, response = fetch(self.port, 'POST', '/pause_release',
+                                 {'show': show, 'mark_id': mark_id})
+        if status != 200:
+            raise WireError(f'Lamp pause release failed, HTTP {status}')
+        return response
+
 
 def _read_fact(duty_port, show, connection, short):
     route = query_path('/dispatch_fact', show=show, connection=connection, short=short)
@@ -52,7 +73,7 @@ def _read_fact(duty_port, show, connection, short):
     return fact
 
 
-def handle_execute(store, show, lamp, duty_port, request):
+def handle_execute(store, show, lamp, duty_port, gate, request):
     body = fields(request.body, ('show', 'request_id', 'preview_id', 'cue', 'short'))
     require_show(body['show'], show)
     connections = request.headers.get_all(CONNECTION_HEADER) or []
@@ -61,8 +82,36 @@ def handle_execute(store, show, lamp, duty_port, request):
     connection = connection_name(connections[0])
     short = integer(body['short'], 'short')
     fact = _read_fact(duty_port, show, connection, short)
-    execute_cue(store, show, lamp, body, connection, fact)
+    # Only a pause marker may briefly wait here; the gate TTL bounds the delay.
+    gate.enter(show)
+    try:
+        execute_cue(store, show, lamp, body, connection, fact)
+    finally:
+        gate.leave(show)
     return 200, {'short': short}
+
+
+def handle_pause_marker(store, gate, show, lamp, request):
+    body = fields(request.body, ('show', 'mark_id'))
+    require_show(body['show'], show)
+    mark_id = text(body['mark_id'], 'mark_id')
+    replay = gate.arm(show, mark_id)
+    return 200, {'show': show, 'mark_id': mark_id, 'replay': bool(replay),
+                 'lamp': lamp, 'head': store.read_head(show, lamp)}
+
+
+def handle_pause_head(store, show, lamp, query):
+    fields(query, ('show',))
+    require_show(query['show'], show)
+    return 200, {'show': show, 'lamp': lamp, 'head': store.read_head(show, lamp)}
+
+
+def handle_pause_release(gate, show, request):
+    body = fields(request.body, ('show', 'mark_id'))
+    require_show(body['show'], show)
+    mark_id = text(body['mark_id'], 'mark_id')
+    released = gate.release(show, mark_id)
+    return 200, {'show': show, 'mark_id': mark_id, 'released': released}
 
 
 def _flash_response(flash):
@@ -84,16 +133,20 @@ def _handle_flash(store, show, lamp, query):
     return _flash_response(read_flash(store, show, lamp, query_integer(query['number'], 'number', 1)))
 
 
-def serve_lamp(path, show, lamp, duty_port, port=0):
+def serve_lamp(path, show, lamp, duty_port, port=0, pause_ttl=5.0):
     text(show, 'show')
     text(lamp, 'lamp')
     integer(duty_port, 'duty port', 1, 65535)
     store = LampStore(path)
     store.initialize()
+    gate = PauseGate(pause_ttl)
     routes = {
-        ('POST', '/execute'): lambda req: handle_execute(store, show, lamp, duty_port, req),
+        ('POST', '/execute'): lambda req: handle_execute(store, show, lamp, duty_port, gate, req),
         ('GET', '/attempt_result'): lambda req: _handle_attempt_result(store, show, lamp, req.query),
         ('GET', '/flash'): lambda req: _handle_flash(store, show, lamp, req.query),
+        ('POST', '/pause_marker'): lambda req: handle_pause_marker(store, gate, show, lamp, req),
+        ('GET', '/pause_head'): lambda req: handle_pause_head(store, show, lamp, req.query),
+        ('POST', '/pause_release'): lambda req: handle_pause_release(gate, show, req),
     }
     return make_server(port, routes)
 
@@ -105,10 +158,11 @@ def main(argv=None):
     parser.add_argument('--lamp', required=True)
     parser.add_argument('--duty-port', type=int, required=True)
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--pause-ttl', type=float, default=5.0)
     args = parser.parse_args(argv)
     try:
         integer(args.port, 'port', 1, 65535)
-        server = serve_lamp(args.db, args.show, args.lamp, args.duty_port, args.port)
+        server = serve_lamp(args.db, args.show, args.lamp, args.port, args.pause_ttl)
     except ApiError as exc:
         parser.error(str(exc))
     with closing(server):

@@ -65,3 +65,19 @@ class LampStore:
     def load_flash(self, show, lamp, number):
         return self._one('SELECT * FROM flashes WHERE show = ? AND lamp = ? AND number = ?',
                          (show, lamp, number))
+
+    def read_head(self, show, lamp):
+        with database(self.path) as db:
+            return db.execute('SELECT COALESCE(MAX(number), 0) FROM flashes WHERE show = ? AND lamp = ?',
+                              (show, lamp)).fetchone()[0]
+
+    def load_prefix(self, show, lamp, head):
+        with database(self.path) as db:
+            rows = db.execute('SELECT * FROM flashes WHERE show = ? AND lamp = ? AND number <= ? '
+                              'ORDER BY number', (show, lamp, head)).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            record['cue'] = json.loads(record['cue'])
+            records.append(record)
+        return records
